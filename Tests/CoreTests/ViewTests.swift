@@ -210,6 +210,22 @@ final class SQLiteTests: XCTestCase {
         XCTAssertTrue(preview.html.contains("Showing 1 of 2 rows"))
     }
 
+    func testFixtureDatabasePreviews() throws {
+        let preview = try PreviewRenderer.render(context: try Fixtures.context("sample.sqlite"))
+        XCTAssertEqual(preview.renderer, "SQLite")
+        XCTAssertTrue(preview.html.contains("users"))
+        XCTAssertTrue(preview.html.contains("active_users"))
+        XCTAssertTrue(preview.html.contains("idx_users_name"))
+        XCTAssertTrue(preview.html.contains("ada@example.com"))
+    }
+
+    func testDbExtensionIsDetectedAsSQLite() throws {
+        let ctx = try Fixtures.context("sample.db")
+        XCTAssertEqual(PreviewRenderer.detectFormat(ctx), .sqlite)
+        let preview = try PreviewRenderer.render(context: ctx)
+        XCTAssertEqual(preview.renderer, "SQLite")
+    }
+
     func testNonDatabaseIsRejected() {
         let data = Data("this is not sqlite".utf8)
         XCTAssertFalse(SQLiteDatabase.isValidDatabase(data: data))

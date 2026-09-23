@@ -95,7 +95,7 @@
 			<key>UTTypeDescription</key>
 			<string>Environment File</string>
 			<key>UTTypeIdentifier</key>
-			<string>com.fosron.quicklooker.env</string>
+			<string>com.fosron.quicklooker.dotenv</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>

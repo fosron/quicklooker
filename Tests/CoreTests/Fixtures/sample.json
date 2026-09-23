@@ -1,0 +1,11 @@
+{
+  "name": "quicklooker-fixture",
+  "version": 2,
+  "enabled": true,
+  "tags": ["json", "preview"],
+  "nested": { "count": 3, "ratio": 0.75, "nothing": null },
+  "records": [
+    { "id": 1, "name": "ada" },
+    { "id": 2, "name": "grace" }
+  ]
+}

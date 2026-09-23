@@ -18,19 +18,27 @@ public enum JSONBuilder {
         if context.contentTypeIdentifier.contains("jsonl") {
             return true
         }
-        let text = context.text
-        var newlines = 0
-        var counted = 0
-        for character in text {
-            if character == "\n" {
-                newlines += 1
-            }
-            counted += 1
-            if counted > 1_000_000 {
-                break
-            }
+        // A known single-document extension always wins: pretty printed JSON is
+        // multi line but is still one document.
+        if ext == "json" || context.contentTypeIdentifier.contains("public.json") {
+            return false
         }
-        return newlines >= 3
+        return looksLikeJSONLines(text: context.text)
+    }
+
+    /// True when at least three non-empty lines each parse as a JSON value.
+    static func looksLikeJSONLines(text: String) -> Bool {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        guard lines.count >= 3 else { return false }
+        var parsed = 0
+        for line in lines.prefix(20) {
+            guard let data = line.data(using: .utf8),
+                  (try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])) != nil else {
+                return false
+            }
+            parsed += 1
+        }
+        return parsed >= 3
     }
 
     // MARK: - Single JSON document

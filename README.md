@@ -81,6 +81,40 @@ distribution.
 - Gzip payloads are capped by `PreviewLimits.maxDecompressedBytes` to guard
   against decompression bombs.
 
+## Verifying previews
+
+`Scripts/verify_previews.swift` renders every supported fixture through the same
+code path the extension uses and reports the renderer, summary and HTML size:
+
+```sh
+swiftc -F <path-to-QuickLookCore.framework> -framework QuickLookCore \
+  Scripts/verify_previews.swift -o /tmp/verify_previews
+DYLD_FRAMEWORK_PATH=<framework-dir> /tmp/verify_previews Tests/CoreTests/Fixtures
+```
+
+Quick Look selects an extension by UTI, so the extension's
+`QLSupportedContentTypes` must contain the type the system resolves for a file
+(or a type that file's type conforms to). `Tests/CoreTests/Fixtures` covers one
+file per claimed type; the resolved UTIs are:
+
+| File | Resolved UTI | Matched by |
+| --- | --- | --- |
+| `.json`, `package.json`, `composer.json` | `public.json` | direct |
+| `.jsonl`, `.ndjson` | `com.fosron.quicklooker.jsonl` | direct (or `public.json` conformance) |
+| `.yaml`, `.yml`, compose files | `public.yaml` | direct |
+| `.toml` | `public.toml` | direct |
+| `.env` | `com.fosron.quicklooker.dotenv` | direct (or `public.plain-text` conformance) |
+| `.md`, `.markdown` | `net.daringfireball.markdown` | direct |
+| `.swift`, `.js`, `.ts`, `.c`, `.go`, `.rs`, … | `public.source-code` conformance | conformance |
+| `.py` | `public.python-script` | direct |
+| `.csv` | `public.comma-separated-values-text` | direct |
+| `.ini` | `com.microsoft.ini` | direct |
+| `.txt`, `.text` | `public.plain-text` | direct |
+| `.sqlite`, `.sqlite3`, `.db` | `org.sqlite.sqlite` | direct |
+| `.zip`, `.jar`, `.epub` | `public.zip-archive` | direct |
+| `.tar` | `public.tar-archive` | direct |
+| `.gz`, `.tgz` | `org.gnu.gnu-zip-archive` | direct |
+
 ## Known environment issue
 
 On this macOS build `qlmanage -p` crashes for any third-party Quick Look

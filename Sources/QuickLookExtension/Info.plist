@@ -31,12 +31,13 @@
 			<key>QLSupportedContentTypes</key>
 			<array>
 				<string>public.json</string>
+				<string>com.fosron.quicklooker.jsonl</string>
 				<string>com.fosron.quicklooker.composerlock</string>
 				<string>com.fosron.quicklooker.yaml</string>
-				<string>com.fosron.quicklooker.jsonl</string>
-				<string>com.fosron.quicklooker.yaml</string>
+				<string>public.yaml</string>
 				<string>com.fosron.quicklooker.toml</string>
-				<string>com.fosron.quicklooker.env</string>
+				<string>public.toml</string>
+				<string>com.fosron.quicklooker.dotenv</string>
 				<string>net.daringfireball.markdown</string>
 				<string>public.comma-separated-values-text</string>
 				<string>public.xml</string>
@@ -45,9 +46,9 @@
 				<string>public.shell-script</string>
 				<string>public.python-script</string>
 				<string>public.plain-text</string>
-				<string>public.text</string>
+				<string>com.microsoft.ini</string>
 				<string>public.database</string>
-				<string>com.apple.sqlite</string>
+				<string>org.sqlite.sqlite</string>
 				<string>public.zip-archive</string>
 				<string>com.pkware.zip-archive</string>
 				<string>org.gnu.gnu-zip-archive</string>

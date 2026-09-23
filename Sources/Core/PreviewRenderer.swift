@@ -86,7 +86,7 @@ public enum PreviewRenderer {
         if ext == "tar" || ext == "tgz" {
             return .archive
         }
-        if ext == "sqlite" || ext == "sqlite3" || ext == "db" || type.contains("sqlite") || type.contains("public.database") {
+        if ext == "sqlite" || ext == "sqlite3" || ext == "db" || type.contains("sqlite") || type.contains("database") {
             return .sqlite
         }
         if type.contains("comma-separated") {
@@ -102,7 +102,7 @@ public enum PreviewRenderer {
         if ext.isEmpty {
             return guessFromContent(context)
         }
-        if ext == "yaml" || ext == "yml" {
+        if ext == "yaml" || ext == "yml" || type.contains("yaml") {
             return .yaml
         }
         if ext == "toml" {
@@ -144,6 +144,9 @@ public enum PreviewRenderer {
             if looksLikeJSON(trimmed) {
                 return .json
             }
+        }
+        if JSONBuilder.looksLikeJSONLines(text: trimmed) {
+            return .jsonLines
         }
         let lines = trimmed.split(separator: "\n")
         var yamlVotes = 0

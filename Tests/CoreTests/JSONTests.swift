@@ -11,6 +11,27 @@ final class JSONTests: XCTestCase {
         XCTAssertEqual(PreviewRenderer.detectFormat(context(#"{"a": 1}"#)), .json)
     }
 
+    func testPrettyPrintedJSONStaysATree() {
+        let pretty = """
+        {
+          "name": "qlp",
+          "nested": {
+            "count": 3
+          },
+          "tags": ["a", "b"]
+        }
+        """
+        XCTAssertEqual(PreviewRenderer.detectFormat(context(pretty)), .json)
+        let preview = try? PreviewRenderer.render(context: context(pretty))
+        XCTAssertEqual(preview?.renderer, "JSON tree")
+    }
+
+    func testExtensionlessJSONLinesStillDetected() {
+        let lines = "{\"id\": 1}\n{\"id\": 2}\n{\"id\": 3}\n"
+        let ctx = RenderContext(data: Data(lines.utf8), fileName: "events")
+        XCTAssertEqual(PreviewRenderer.detectFormat(ctx), .jsonLines)
+    }
+
     func testTreeRenderContainsKeysAndValues() throws {
         let ctx = context(#"{"name": "qlp", "count": 3, "ok": true, "none": null}"#)
         let preview = try PreviewRenderer.render(context: ctx)
