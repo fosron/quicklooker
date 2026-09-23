@@ -1,0 +1,6 @@
+services:
+  web:
+    ports:
+      - "3000:80"
+    environment:
+      DEBUG: "true"

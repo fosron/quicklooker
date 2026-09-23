@@ -1,0 +1,3 @@
+{"id": 1, "event": "created", "user": {"name": "ada"}}
+{"id": 2, "event": "updated", "user": {"name": "grace"}}
+{"id": 3, "event": "deleted", "user": {"name": "linus"}}

@@ -1,0 +1,30 @@
+{
+    "_readme": ["This file locks the dependencies of your project to a known state"],
+    "content-hash": "8b7b0c1e4f5a6d7e8f90a1b2c3d4e5f6a7b8c9d0",
+    "packages": [
+        {
+            "name": "monolog/monolog",
+            "version": "3.5.0",
+            "description": "Sends your logs to files, sockets, inboxes, databases and various web services",
+            "license": ["MIT"],
+            "require": { "php": ">=8.1", "psr/log": "^2.0 || ^3.0" }
+        },
+        {
+            "name": "symfony/console",
+            "version": "v6.4.6",
+            "description": "Eases the creation of beautiful and testable command line interfaces",
+            "license": ["MIT"],
+            "require": { "php": ">=8.1", "symfony/polyfill-mbstring": "~1.0" }
+        }
+    ],
+    "packages-dev": [
+        {
+            "name": "phpunit/phpunit",
+            "version": "10.5.20",
+            "description": "The PHP Unit Testing framework.",
+            "license": ["BSD-3-Clause"],
+            "require": { "php": ">=8.1", "ext-dom": "*" }
+        }
+    ],
+    "plugin-api-version": "2.6.0"
+}

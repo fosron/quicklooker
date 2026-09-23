@@ -1,0 +1,19 @@
+# Service configuration
+name: quicklook
+version: 2.1.0
+enabled: true
+replicas: 3
+ratio: 0.75
+tags:
+  - fast
+  - local
+  - offline
+server:
+  host: 127.0.0.1
+  port: 8080
+  tls: false
+  limits:
+    maxUploadMb: 512
+    timeoutSeconds: 30
+logging: { level: info, format: json }
+emptyValue:

@@ -1,0 +1,83 @@
+name: quicklooker-stack
+version: "3.9"
+
+services:
+  web:
+    image: nginx:1.25-alpine
+    container_name: qlp-web
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./site:/usr/share/nginx/html:ro
+      - static:/var/www/static
+    environment:
+      NGINX_HOST: example.com
+      NGINX_PORT: 80
+      APP_API_KEY: sk-live-0123456789abcdef
+      DATABASE_PASSWORD: hunter2
+    depends_on:
+      - api
+    networks:
+      - frontend
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.dev
+      target: development
+    command: ["php-fpm", "-F"]
+    entrypoint: /entrypoint.sh
+    user: "1000:1000"
+    working_dir: /app
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./api:/app
+    environment:
+      - APP_ENV=dev
+      - APP_DEBUG=true
+      - STRIPE_SECRET=sk_test_abcdefghijklmnop
+    env_file:
+      - .env
+      - .env.local
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+    profiles:
+      - dev
+    networks:
+      - frontend
+      - backend
+
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: super-secret-password
+      POSTGRES_DB: app
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - backend
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+volumes:
+  static:
+  db-data:
+
+networks:
+  frontend:
+  backend:
+    driver: bridge
+
+secrets:
+  tls_cert:
+    file: ./certs/tls.crt

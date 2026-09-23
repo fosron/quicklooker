@@ -1,0 +1,41 @@
+{
+    "name": "fosron/quicklooker-fixture",
+    "description": "Fixture composer manifest for tests",
+    "type": "library",
+    "license": ["MIT", "Apache-2.0"],
+    "keywords": ["quicklook", "preview", "macos"],
+    "homepage": "https://example.com/quicklooker",
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "authors": [
+        { "name": "Ada Lovelace", "email": "ada@example.com", "role": "Developer" },
+        { "name": "Grace Hopper" }
+    ],
+    "support": {
+        "issues": "https://example.com/issues",
+        "docs": "https://example.com/docs"
+    },
+    "require": {
+        "php": ">=8.1",
+        "ext-json": "*",
+        "symfony/console": "^6.4",
+        "monolog/monolog": "^3.5"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5",
+        "phpstan/phpstan": "^1.11"
+    },
+    "suggest": {
+        "ext-intl": "Better locale handling"
+    },
+    "autoload": {
+        "psr-4": { "Fosron\\QuickLooker\\": "src/" }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "analyse": ["phpstan analyse", "php-cs-fixer fix --dry-run"]
+    },
+    "extra": {
+        "branch-alias": { "dev-main": "1.0-dev" }
+    }
+}
