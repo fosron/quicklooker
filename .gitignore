@@ -1,0 +1,13 @@
+.DS_Store
+build/
+DerivedData/
+# Project is generated from project.yml via `xcodegen generate`
+*.xcodeproj
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcuserstate
+.swiftpm/
+.build/
+*.ipa
+*.dSYM.zip
