@@ -72,6 +72,12 @@ final class DockerComposeTests: XCTestCase {
         XCTAssertTrue(preview.html.contains("profile: dev"))
     }
 
+    func testApiKeyStyleVariablesAreMasked() {
+        XCTAssertTrue(SecretsMasking.shouldMask(key: "STRIPE_KEY", value: "sk_test_1234567890"))
+        XCTAssertTrue(SecretsMasking.shouldMask(key: "DATABASE_URL", value: "postgres://u:p@host/db"))
+        XCTAssertFalse(SecretsMasking.shouldMask(key: "LOG_LEVEL", value: "debug"))
+    }
+
     func testEnvironmentValuesAreMasked() throws {
         let preview = try PreviewRenderer.render(context: try PreviewFixtureContext())
         XCTAssertTrue(preview.html.contains("NGINX_HOST"))

@@ -24,6 +24,9 @@ public final class SQLiteDatabase {
         public let rows: [[String]]
         public let totalRows: Int
         public let sampledRows: Int
+        /// True when counting the rows was aborted because the query ran too
+        /// long. `totalRows` is then only the number of rows returned.
+        public let countTimedOut: Bool
     }
 
     private var handle: OpaquePointer?
@@ -40,6 +43,35 @@ public final class SQLiteDatabase {
             case .notADatabase: return "The file is not a SQLite database."
             case .queryFailed(let reason): return "Query failed: \(reason)"
             }
+        }
+    }
+
+    /// Aborts statements that run longer than `interval` so a pathological
+    /// view or a huge table can never hang the preview. `sqlite3_interrupt`
+    /// only cancels the running statement, so later queries are unaffected.
+    private final class QueryDeadline {
+        private let expiresAt: Date
+        private var fired = false
+
+        init(seconds: TimeInterval) {
+            expiresAt = Date().addingTimeInterval(seconds)
+        }
+
+        /// Called from the SQLite progress hook; returning non-zero aborts.
+        func check() -> Int32 {
+            if Date() >= expiresAt {
+                fired = true
+                return 1
+            }
+            return 0
+        }
+
+        var didFire: Bool { fired }
+
+        static let handler: @convention(c) (UnsafeMutableRawPointer?) -> Int32 = { context in
+            guard let context else { return 0 }
+            let deadline = Unmanaged<QueryDeadline>.fromOpaque(context).takeUnretainedValue()
+            return deadline.check()
         }
     }
 
@@ -113,24 +145,34 @@ public final class SQLiteDatabase {
 
     /// Convenience for tests and previews: number of rows in a table.
     public func rowCount(table: String) throws -> Int {
+        try rowCount(table: table, deadline: QueryDeadline(seconds: 1.5))
+    }
+
+    private func rowCount(table: String, deadline: QueryDeadline) throws -> Int {
         let sql = "SELECT COUNT(*) FROM \(quoteIdentifier(table))"
-        return try query(sql) { statement in
+        return try query(sql, deadline: deadline) { statement in
             Int(sqlite3_column_int64(statement, 0))
         }.first ?? 0
     }
 
-    /// Loads at most `limit` rows. When `sampleRows` is larger than zero the
-    /// column type names are derived from that many rows instead of the full
-    /// table, which keeps previews fast on large databases.
-    public func preview(table: String, limit: Int, sampleRows: Int = 0, skipCount: Bool = false) throws -> RowPreview {
+    /// Loads at most `limit` rows. Views are never counted because a recursive
+    /// view can run forever, and every statement gets a wall clock deadline.
+    public func preview(table: String, limit: Int, sampleRows: Int = 0, isView: Bool = false) throws -> RowPreview {
         var total = 0
-        if !skipCount {
-            total = try rowCount(table: table)
+        var counted = false
+        if !isView {
+            let deadline = QueryDeadline(seconds: 1.5)
+            total = try rowCount(table: table, deadline: deadline)
+            counted = !deadline.didFire
+            if !counted {
+                total = 0
+            }
         }
         let sql = "SELECT * FROM \(quoteIdentifier(table)) LIMIT \(max(0, limit))"
         var columns: [String] = []
         var rows: [[String]] = []
-        try execute(sql) { statement in
+        let rowDeadline = QueryDeadline(seconds: 2.5)
+        try execute(sql, deadline: rowDeadline) { statement in
             let columnCount = Int(sqlite3_column_count(statement))
             for index in 0..<columnCount {
                 columns.append(String(cString: sqlite3_column_name(statement, Int32(index))))
@@ -143,10 +185,17 @@ public final class SQLiteDatabase {
                 rows.append(row)
             }
         }
-        if skipCount {
+        let hitRowDeadline = rowDeadline.didFire
+        if !counted || hitRowDeadline {
             total = rows.count
         }
-        return RowPreview(columns: columns, rows: rows, totalRows: total, sampledRows: max(0, sampleRows))
+        return RowPreview(
+            columns: columns,
+            rows: rows,
+            totalRows: total,
+            sampledRows: max(0, sampleRows),
+            countTimedOut: !counted
+        )
     }
 
     public func columns(table: String) throws -> [Column] {
@@ -163,22 +212,43 @@ public final class SQLiteDatabase {
 
     // MARK: - Statement plumbing
 
-    private func execute(_ sql: String, bind: [String] = [], _ body: (OpaquePointer) throws -> Void) throws {
+    private func execute(
+        _ sql: String,
+        bind: [String] = [],
+        deadline: QueryDeadline? = nil,
+        _ body: (OpaquePointer) throws -> Void
+    ) throws {
         guard let handle else { throw OpenError.cannotOpen("database is closed") }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
             throw OpenError.queryFailed(String(cString: sqlite3_errmsg(handle)))
         }
-        defer { sqlite3_finalize(statement) }
+        defer {
+            sqlite3_finalize(statement)
+            sqlite3_progress_handler(handle, 1000, nil, nil)
+        }
+        if let deadline {
+            sqlite3_progress_handler(
+                handle,
+                1000,
+                QueryDeadline.handler,
+                Unmanaged.passUnretained(deadline).toOpaque()
+            )
+        }
         for (offset, value) in bind.enumerated() {
             sqlite3_bind_text(statement, Int32(offset + 1), value, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         }
         try body(statement)
     }
 
-    private func query<T>(_ sql: String, bind: [String] = [], _ transform: (OpaquePointer) -> T) throws -> [T] {
+    private func query<T>(
+        _ sql: String,
+        bind: [String] = [],
+        deadline: QueryDeadline? = nil,
+        _ transform: (OpaquePointer) -> T
+    ) throws -> [T] {
         var results: [T] = []
-        try execute(sql, bind: bind) { statement in
+        try execute(sql, bind: bind, deadline: deadline) { statement in
             while sqlite3_step(statement) == SQLITE_ROW {
                 results.append(transform(statement))
             }
@@ -320,7 +390,12 @@ public enum SQLiteBuilder {
         }
 
         // Rows
-        let preview = try database.preview(table: object.name, limit: context.limits.maxRows, sampleRows: context.limits.maxRows)
+        let preview = try database.preview(
+            table: object.name,
+            limit: context.limits.maxRows,
+            sampleRows: context.limits.maxRows,
+            isView: isView
+        )
         if preview.rows.isEmpty {
             html += "<div class=\"empty\">No rows.</div>"
         } else {
@@ -338,7 +413,11 @@ public enum SQLiteBuilder {
             }
             html += Document.table(headers: headers, rows: rows)
             let shown = preview.rows.count
-            if preview.totalRows > shown {
+            if preview.countTimedOut {
+                html += "<div class=\"meta\" style=\"margin-top:6px\">Showing the first \(Format.integer(shown)) row\(shown == 1 ? "" : "s"); the full count timed out.</div>"
+            } else if isView {
+                html += "<div class=\"meta\" style=\"margin-top:6px\">Showing \(Format.integer(shown)) row\(shown == 1 ? "" : "s") of the view.</div>"
+            } else if preview.totalRows > shown {
                 html += "<div class=\"meta\" style=\"margin-top:6px\">Showing \(Format.integer(shown)) of \(Format.integer(preview.totalRows)) rows.</div>"
             } else {
                 html += "<div class=\"meta\" style=\"margin-top:6px\">\(Format.integer(shown)) row\(shown == 1 ? "" : "s").</div>"

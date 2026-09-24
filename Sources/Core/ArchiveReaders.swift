@@ -44,53 +44,122 @@ public enum ZIPReader {
     }
 
     /// Central directory entries, in file order. Directories are included.
+    ///
+    /// Only the end of central directory record and the central directory are
+    /// read, so a large archive never needs to be loaded into memory in full.
     public static func entries(in data: Data) throws -> [Entry] {
-        let bytes = [UInt8](data)
-        guard let eocd = findEndOfCentralDirectory(bytes) else {
+        guard let eocd = findEndOfCentralDirectory(data) else {
             throw ArchiveError.notAnArchive
         }
-        let entryCount = Int(readUInt16(bytes, eocd + 10))
-        let centralOffset = Int(readUInt32(bytes, eocd + 16))
-        let centralSize = Int(readUInt32(bytes, eocd + 12))
+        let entryCount = Int(readUInt16(data, eocd + 10))
+        let centralOffset = Int(readUInt32(data, eocd + 16))
+        let centralSize = Int(readUInt32(data, eocd + 12))
 
         if centralOffset == 0xFFFF_FFFF || entryCount == 0xFFFF || centralSize == 0xFFFF_FFFF {
             throw ArchiveError.zip64Unsupported
         }
 
+        guard centralOffset >= 0, centralSize >= 0,
+              centralOffset + centralSize <= data.count else {
+            throw ArchiveError.corrupted("central directory is outside the read window")
+        }
+        let directory = data[centralOffset..<(centralOffset + centralSize)]
+        return try parseCentralDirectory(directory, entryCount: entryCount)
+    }
+
+    /// File backed variant. Reads the EOCD and central directory by seeking so
+    /// archives larger than the preview read limit still list correctly, and
+    /// also handles archives whose central directory sits past the truncation
+    /// point of `data` (the provider reads the head plus the tail).
+    public static func entries(fileURL: URL, data: Data) throws -> [Entry] {
+        if hasCompleteCentralDirectory(data) {
+            return try entries(in: data)
+        }
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            throw ArchiveError.notAnArchive
+        }
+        defer { try? handle.close() }
+
+        let fileSize = (try? handle.seekToEnd()) ?? 0
+        guard fileSize >= 22 else { throw ArchiveError.notAnArchive }
+
+        let tailLength = min(UInt64(66_000), fileSize)
+        try handle.seek(toOffset: fileSize - tailLength)
+        guard let tail = try handle.read(upToCount: Int(tailLength)) else {
+            throw ArchiveError.notAnArchive
+        }
+        guard let eocdInTail = findEndOfCentralDirectory(tail) else {
+            throw ArchiveError.notAnArchive
+        }
+
+        let entryCount = Int(readUInt16(tail, eocdInTail + 10))
+        let centralOffsetValue = readUInt32(tail, eocdInTail + 16)
+        let centralSize = Int(readUInt32(tail, eocdInTail + 12))
+        if centralOffsetValue == 0xFFFF_FFFF || entryCount == 0xFFFF || centralSize == 0xFFFF_FFFF {
+            throw ArchiveError.zip64Unsupported
+        }
+        let centralOffset = UInt64(centralOffsetValue)
+        guard centralOffset < fileSize else {
+            throw ArchiveError.corrupted("central directory offset is outside the file")
+        }
+        let available = Int(min(UInt64(centralSize), fileSize - centralOffset, UInt64(256 * 1024 * 1024)))
+        try handle.seek(toOffset: centralOffset)
+        guard let directory = try handle.read(upToCount: max(available, 46)) else {
+            throw ArchiveError.corrupted("central directory could not be read")
+        }
+        return try parseCentralDirectory(directory, entryCount: entryCount)
+    }
+
+    /// True when `data` contains a complete central directory for a ZIP file.
+    private static func hasCompleteCentralDirectory(_ data: Data) -> Bool {
+        guard let eocd = findEndOfCentralDirectory(data) else { return false }
+        let entryCount = Int(readUInt16(data, eocd + 10))
+        let centralOffset = Int(readUInt32(data, eocd + 16))
+        let centralSize = Int(readUInt32(data, eocd + 12))
+        guard centralOffset != 0xFFFF_FFFF, entryCount != 0xFFFF, centralSize != 0xFFFF_FFFF else {
+            return false
+        }
+        return centralOffset + centralSize <= data.count && centralOffset >= 0 && centralSize >= 0
+    }
+
+    private static func parseCentralDirectory(_ slice: Data, entryCount: Int) throws -> [Entry] {
+        // Normalise to a zero based Data: slices keep the parent's indices and
+        // the offset arithmetic below assumes index == offset.
+        let data = slice.startIndex == slice.endIndex ? Data() : Data(slice)
         var entries: [Entry] = []
-        var cursor = centralOffset
+        var cursor = 0
         var parsed = 0
-        while parsed < entryCount, cursor + 46 <= bytes.count {
-            guard readUInt32(bytes, cursor) == 0x0201_4b50 else { break }
-            let flags = readUInt16(bytes, cursor + 8)
-            let method = readUInt16(bytes, cursor + 10)
-            let modTime = readUInt16(bytes, cursor + 12)
-            let modDate = readUInt16(bytes, cursor + 14)
-            let crc = readUInt32(bytes, cursor + 16)
-            let compressedSize = Int(readUInt32(bytes, cursor + 20))
-            let uncompressedSize = Int(readUInt32(bytes, cursor + 24))
-            let nameLength = Int(readUInt16(bytes, cursor + 28))
-            let extraLength = Int(readUInt16(bytes, cursor + 30))
-            let commentLength = Int(readUInt16(bytes, cursor + 32))
-            let externalAttributes = readUInt32(bytes, cursor + 38)
+        while parsed < entryCount, cursor + 46 <= data.count {
+            guard readUInt32(data, cursor) == 0x0201_4b50 else { break }
+            let flags = readUInt16(data, cursor + 8)
+            let method = readUInt16(data, cursor + 10)
+            let modTime = readUInt16(data, cursor + 12)
+            let modDate = readUInt16(data, cursor + 14)
+            let crc = readUInt32(data, cursor + 16)
+            let compressedSize = Int(readUInt32(data, cursor + 20))
+            let uncompressedSize = Int(readUInt32(data, cursor + 24))
+            let nameLength = Int(readUInt16(data, cursor + 28))
+            let extraLength = Int(readUInt16(data, cursor + 30))
+            let commentLength = Int(readUInt16(data, cursor + 32))
+            let externalAttributes = readUInt32(data, cursor + 38)
 
             guard flags & 0x0001 == 0 else { throw ArchiveError.encryptedUnsupported }
 
             let nameStart = cursor + 46
-            guard nameStart + nameLength <= bytes.count else {
+            guard nameStart + nameLength <= data.count else {
                 throw ArchiveError.corrupted("truncated file name")
             }
-            let nameBytes = Array(bytes[nameStart..<(nameStart + nameLength)])
+            let nameBytes = data[nameStart..<(nameStart + nameLength)]
             let isUTF8 = flags & 0x0800 != 0
             let name = decodeName(nameBytes, isUTF8: isUTF8, nameLength: nameLength)
 
             let extraStart = nameStart + nameLength
-            let extraBytes = extraStart..<min(bytes.count, extraStart + extraLength)
             if extraLength > 0 {
-                var extraCursor = extraBytes.lowerBound
-                while extraCursor + 4 <= extraBytes.upperBound {
-                    let headerID = readUInt16(bytes, extraCursor)
-                    let dataSize = Int(readUInt16(bytes, extraCursor + 2))
+                var extraCursor = extraStart
+                let extraEnd = min(data.count, extraStart + extraLength)
+                while extraCursor + 4 <= extraEnd {
+                    let headerID = readUInt16(data, extraCursor)
+                    let dataSize = Int(readUInt16(data, extraCursor + 2))
                     if headerID == 0x0001 {
                         throw ArchiveError.zip64Unsupported
                     }
@@ -118,34 +187,32 @@ public enum ZIPReader {
 
     /// Human readable archive comment, if present.
     public static func comment(in data: Data) -> String? {
-        let bytes = [UInt8](data)
-        guard let eocd = findEndOfCentralDirectory(bytes) else { return nil }
-        let length = Int(readUInt16(bytes, eocd + 20))
-        guard length > 0 else { return nil }
-        let start = eocd + 22
-        guard start + length <= bytes.count else { return nil }
-        return String(data: Data(bytes[start..<(start + length)]), encoding: .utf8)
+        guard let eocd = findEndOfCentralDirectory(data) else { return nil }
+        let length = Int(readUInt16(data, eocd + 20))
+        guard length > 0, eocd + 22 + length <= data.count else { return nil }
+        return String(data: data[(eocd + 22)..<(eocd + 22 + length)], encoding: .utf8)
     }
 
     // MARK: - Helpers
 
-    private static func decodeName(_ bytes: [UInt8], isUTF8: Bool, nameLength: Int) -> String {
-        if isUTF8, let name = String(bytes: bytes, encoding: .utf8) {
+    private static func decodeName(_ bytes: Data, isUTF8: Bool, nameLength: Int) -> String {
+        if isUTF8, let name = String(data: bytes, encoding: .utf8) {
             return name
         }
         // Bit 11 unset means CP437; a UTF-8 attempt still handles the common case.
-        if let name = String(bytes: bytes, encoding: .utf8) {
+        if let name = String(data: bytes, encoding: .utf8) {
             return name
         }
-        return String(data: Data(bytes), encoding: .isoLatin1) ?? "<name \(nameLength) bytes>"
+        return String(data: bytes, encoding: .isoLatin1) ?? "<name \(nameLength) bytes>"
     }
 
-    static func findEndOfCentralDirectory(_ bytes: [UInt8]) -> Int? {
-        guard bytes.count >= 22 else { return nil }
-        let minimum = max(0, bytes.count - 22 - 65_535)
-        var index = bytes.count - 22
+    public static func findEndOfCentralDirectory(_ data: Data) -> Int? {
+        guard data.count >= 22 else { return nil }
+        let minimum = max(0, data.count - 22 - 65_535)
+        var index = data.count - 22
         while index >= minimum {
-            if bytes[index] == 0x50, bytes[index + 1] == 0x4b, bytes[index + 2] == 0x05, bytes[index + 3] == 0x06 {
+            let base = data.startIndex + index
+            if data[base] == 0x50, data[base + 1] == 0x4B, data[base + 2] == 0x05, data[base + 3] == 0x06 {
                 return index
             }
             index -= 1
@@ -153,17 +220,19 @@ public enum ZIPReader {
         return nil
     }
 
-    static func readUInt16(_ bytes: [UInt8], _ offset: Int) -> UInt16 {
-        guard offset + 2 <= bytes.count else { return 0 }
-        return UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+    static func readUInt16(_ data: Data, _ offset: Int) -> UInt16 {
+        guard offset >= 0, offset + 2 <= data.count else { return 0 }
+        let base = data.startIndex + offset
+        return UInt16(data[base]) | (UInt16(data[base + 1]) << 8)
     }
 
-    static func readUInt32(_ bytes: [UInt8], _ offset: Int) -> UInt32 {
-        guard offset + 4 <= bytes.count else { return 0 }
-        return UInt32(bytes[offset])
-            | (UInt32(bytes[offset + 1]) << 8)
-            | (UInt32(bytes[offset + 2]) << 16)
-            | (UInt32(bytes[offset + 3]) << 24)
+    static func readUInt32(_ data: Data, _ offset: Int) -> UInt32 {
+        guard offset >= 0, offset + 4 <= data.count else { return 0 }
+        let base = data.startIndex + offset
+        return UInt32(data[base])
+            | (UInt32(data[base + 1]) << 8)
+            | (UInt32(data[base + 2]) << 16)
+            | (UInt32(data[base + 3]) << 24)
     }
 
     static func dosDate(date: UInt16, time: UInt16) -> Date? {
@@ -235,12 +304,13 @@ public enum TARReader {
                 throw ArchiveError.corrupted("unreadable header at offset \(offset)")
             }
             let prefix = readString(block, 345, 155) ?? ""
-            let sizeField = readString(block, 124, 12) ?? "0"
-            let size = parseNumeric(sizeField) ?? 0
-            let modifiedValue = readString(block, 136, 12).flatMap { parseNumeric($0) }
-            let typeFlag = String(UnicodeScalar(block[156] ?? 0))
+            // Size and mtime are raw numeric fields: they may be octal or GNU
+            // base-256, so they must not be decoded as text first.
+            let size = parseNumericBytes(block, offset: 124, length: 12) ?? 0
+            let modifiedValue = parseNumericBytes(block, offset: 136, length: 12)
+            let typeFlag = String(UnicodeScalar(block[156]))
             let linkName = readString(block, 157, 100)
-            let modeValue = readString(block, 100, 8).flatMap { parseNumeric($0) } ?? 0
+            let modeValue = parseNumericBytes(block, offset: 100, length: 8) ?? 0
             let mode = String(format: "%03o", modeValue)
 
             offset += 512
@@ -312,22 +382,27 @@ public enum TARReader {
         return String(bytes: bytes, encoding: .utf8)
     }
 
-    /// Handles both octal and GNU base-256 numeric fields.
-    static func parseNumeric(_ text: String) -> Int? {
-        let trimmed = text.trimmingCharacters(in: CharacterSet(charactersIn: " \0"))
-        if trimmed.isEmpty { return 0 }
-        if trimmed.hasPrefix("\u{80}") || trimmed.unicodeScalars.first.map({ $0.value > 127 }) == true {
+    /// Reads a numeric header field. Octal fields are NUL or space terminated;
+    /// GNU base-256 fields carry a 0x80 marker, which may sit after leading
+    /// sign extension bytes (`00 00 00 00 00 00 00 80 …` for large positives).
+    static func parseNumericBytes(_ block: [UInt8], offset: Int, length: Int) -> Int? {
+        guard offset >= 0, length > 0, offset + length <= block.count else { return nil }
+        let field = Array(block[offset..<(offset + length)])
+        if let marker = field.firstIndex(where: { $0 & 0x80 != 0 }) {
             var value = 0
-            for scalar in trimmed.unicodeScalars {
-                var byte = Int(scalar.value & 0xFF)
-                if value == 0 {
-                    byte &= 0x7F
-                }
-                value = (value << 8) | byte
+            for (index, byte) in field[marker...].enumerated() {
+                value = (value << 8) | Int(index == 0 ? byte & 0x7F : byte)
             }
             return value
         }
-        return Int(trimmed, radix: 8)
+        let digits = field.prefix { $0 >= 0x30 && $0 <= 0x37 }
+        guard !digits.isEmpty else { return 0 }
+        return Int(String(bytes: digits, encoding: .ascii) ?? "", radix: 8)
+    }
+
+    /// Handles both octal and GNU base-256 numeric fields.
+    static func parseNumeric(_ text: String) -> Int? {
+        parseNumericBytes(Array(text.utf8), offset: 0, length: text.utf8.count)
     }
 }
 
@@ -401,7 +476,10 @@ public enum GZIPReader {
             cursor += 2
         }
 
-        guard cursor < bytes.count else { throw GZIPError.truncatedHeader }
+        // The 8 byte trailer (CRC32 + ISIZE) must still be present. A header
+        // with a filename, comment or header CRC can otherwise run to the end
+        // of the file and make the deflate range invalid.
+        guard cursor <= bytes.count - 8 else { throw GZIPError.truncatedHeader }
         let deflated = bytes[cursor..<(bytes.count - 8)]
         let originalSize = Int(readUInt32(bytes, bytes.count - 4))
 

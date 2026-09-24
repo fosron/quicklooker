@@ -50,8 +50,27 @@ final class SecretsTests: XCTestCase {
         XCTAssertTrue(SecretsBuilder.isSecretKey("github_token"))
         XCTAssertTrue(SecretsBuilder.isSecretKey("AWS_SECRET_ACCESS_KEY"))
         XCTAssertTrue(SecretsBuilder.isSecretKey("SESSION_ID"))
+        XCTAssertTrue(SecretsBuilder.isSecretKey("STRIPE_KEY"))
+        XCTAssertTrue(SecretsBuilder.isSecretKey("SSH_PRIVATE_KEY"))
+        XCTAssertTrue(SecretsBuilder.isSecretKey("clientSecret"))
         XCTAssertFalse(SecretsBuilder.isSecretKey("APP_NAME"))
         XCTAssertFalse(SecretsBuilder.isSecretKey("DEBUG"))
+        XCTAssertFalse(SecretsBuilder.isSecretKey("AUTHOR"))
+        XCTAssertFalse(SecretsBuilder.isSecretKey("KEYBOARD_LAYOUT"))
+        XCTAssertFalse(SecretsBuilder.isSecretKey("MONKEY_PATCH"))
+    }
+
+    func testCredentialURLsMaskOnlyThePassword() {
+        let masked = SecretsMasking.mask("postgres://admin:hunter2@db.example.com:5432/app")
+        XCTAssertEqual(masked, "postgres://admin:••••••@db.example.com:5432/app")
+        XCTAssertFalse(masked.contains("hunter2"))
+    }
+
+    func testVariableReferencesToSecretsAreMasked() {
+        XCTAssertTrue(SecretsMasking.shouldMask(key: "DB_URL", value: "${DB_PASSWORD}"))
+        XCTAssertTrue(SecretsMasking.shouldMask(key: "DB_URL", value: "$API_KEY"))
+        XCTAssertFalse(SecretsMasking.shouldMask(key: "APP_ENV", value: "${APP_ENV}"))
+        XCTAssertEqual(SecretsMasking.mask("${DB_PASSWORD}"), "${••••••}")
     }
 
     func testMaskingKeepsShortPrefixOnly() {

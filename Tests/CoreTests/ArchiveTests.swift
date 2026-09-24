@@ -132,6 +132,96 @@ final class ArchiveTests: XCTestCase {
         XCTAssertTrue(preview.html.contains("tar entries"))
     }
 
+    // MARK: - Regression tests
+
+    func testGZIPWithHeaderRunningToTheEndDoesNotCrash() {
+        // Magic + deflate flag, then a name/comment that runs to the very end.
+        var data = Data([0x1F, 0x8B, 0x08, 0x18])
+        data.append(Data(repeating: 0, count: 6)) // mtime, xfl, os
+        data.append(Data("name".utf8))
+        data.append(0)
+        data.append(Data(repeating: 0x41, count: 3))
+        // Header (with the NUL terminated name) reaches within 8 bytes of the end.
+        XCTAssertThrowsError(try GZIPReader.decompress(data, maxBytes: 1024))
+    }
+
+    func testTARBase256SizeIsDecoded() throws {
+        // GNU base-256 large size field: 0x80 marker + big endian value.
+        var header = [UInt8](repeating: 0, count: 512)
+        let name = Array("huge.bin".utf8)
+        header.replaceSubrange(0..<name.count, with: name)
+        header[100] = 0x30; header[101] = 0x30; header[102] = 0x30; header[103] = 0x30
+        // The size field is 12 bytes; a base-256 value has 11 value bytes and
+        // a 0x80 marker (the previous bytes are implicitly 0xFF for negatives).
+        let size: Int = 9_000_000_000
+        var encoded = [UInt8](repeating: 0, count: 12)
+        let valueBytes = Self.base256(size)
+        encoded.replaceSubrange(4..<12, with: valueBytes)
+        header.replaceSubrange(124..<136, with: encoded)
+        header[156] = UInt8(ascii: "0")
+        let magic = Array("ustar".utf8)
+        header.replaceSubrange(257..<262, with: magic)
+        // Two zero blocks terminate the archive.
+        let data = Data(header) + Data(repeating: 0, count: 1024)
+
+        let entries = try TARReader.entries(in: data)
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries[0].name, "huge.bin")
+        XCTAssertEqual(entries[0].size, 9_000_000_000)
+    }
+
+    func testZIPEntriesReadFromFileForLargeArchives() throws {
+        // Build a ZIP larger than a typical read window without loading it.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("qlp-large-\(UUID().uuidString).zip")
+        defer {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+        let sourceDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("qlp-src-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sourceDir) }
+        try Data("hello".utf8).write(to: sourceDir.appendingPathComponent("hello.txt"))
+        try Data(repeating: 0x42, count: 10 * 1024 * 1024).write(to: sourceDir.appendingPathComponent("big.bin"))
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        process.arguments = ["-q", url.path, "hello.txt", "big.bin"]
+        process.currentDirectoryURL = sourceDir
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0, "zip command failed")
+
+        // Only the head is passed in, mimicking a truncated read: the reader
+        // must fall back to seeking within the file for the central directory.
+        let head = try FileHandle(forReadingFrom: url).read(upToCount: 64 * 1024) ?? Data()
+        let entries = try ZIPReader.entries(fileURL: url, data: head)
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertTrue(entries.contains { $0.name == "hello.txt" })
+        XCTAssertTrue(entries.contains { $0.name == "big.bin" })
+    }
+
+    /// GNU base-256 encoding: high bit marks the field, value is big endian.
+    static func base256(_ value: Int) -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: 8)
+        var remaining = value
+        for index in stride(from: 7, through: 1, by: -1) {
+            bytes[index] = UInt8(remaining & 0xFF)
+            remaining >>= 8
+        }
+        bytes[0] = UInt8(remaining & 0x7F) | 0x80
+        return bytes
+    }
+
+    func testZipWithoutExtensionIsRoutedToArchive() throws {
+        let data = try Fixtures.data("sample.zip")
+        let context = RenderContext(data: data, fileName: "archive")
+        XCTAssertEqual(PreviewRenderer.detectFormat(context), .archive)
+        let preview = try PreviewRenderer.render(context: context)
+        XCTAssertEqual(preview.renderer, "ZIP archive")
+    }
+
     func testFolderListing() throws {
         let folder = Fixtures.directory
         let context = RenderContext(data: Data(), fileName: folder.lastPathComponent, fileURL: folder)

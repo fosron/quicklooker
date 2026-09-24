@@ -27,7 +27,20 @@ final class MarkdownTests: XCTestCase {
     func testLinksAndImages() {
         let html = render("[docs](https://example.com) and ![alt](https://example.com/i.png)").html
         XCTAssertTrue(html.contains("<a href=\"https://example.com\">docs</a>"))
-        XCTAssertTrue(html.contains("<img src=\"https://example.com/i.png\" alt=\"alt\">"))
+        // Remote images are not fetched; the source is shown as a placeholder.
+        XCTAssertFalse(html.contains("<img"))
+        XCTAssertTrue(html.contains("https://example.com/i.png"))
+    }
+
+    func testLocalImagesRender() {
+        let html = render("![diagram](./assets/diagram.png)").html
+        XCTAssertTrue(html.contains("<img src=\"./assets/diagram.png\" alt=\"diagram\">"))
+    }
+
+    func testQuoteInURLCannotBreakOutOfAttribute() {
+        let html = render(#"[click](https://x.test/?a=&quot;onmouseover=&quot;alert(1))"#).html
+        XCTAssertFalse(html.contains("<a href=\"https://x.test/?a=\"onmouseover"))
+        XCTAssertTrue(html.contains("onmouseover"))
     }
 
     func testListsAndTaskItems() {
@@ -224,6 +237,37 @@ final class SQLiteTests: XCTestCase {
         XCTAssertEqual(PreviewRenderer.detectFormat(ctx), .sqlite)
         let preview = try PreviewRenderer.render(context: ctx)
         XCTAssertEqual(preview.renderer, "SQLite")
+    }
+
+    func testRecursiveViewDoesNotHang() throws {
+        // A view that would run forever must be cut off by the query deadline.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("qlp-recursive-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &handle), SQLITE_OK)
+        sqlite3_exec(handle, "CREATE TABLE seed (id INTEGER PRIMARY KEY)", nil, nil, nil)
+        sqlite3_exec(handle, "INSERT INTO seed (id) VALUES (1)", nil, nil, nil)
+        let view = """
+        CREATE VIEW cosmic AS
+        WITH RECURSIVE counter(n) AS (
+            SELECT 1 UNION ALL SELECT n + 1 FROM counter
+        )
+        SELECT n FROM counter
+        """
+        XCTAssertEqual(sqlite3_exec(handle, view, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(handle)
+
+        let context = RenderContext(
+            data: try Data(contentsOf: url),
+            fileName: url.lastPathComponent,
+            fileURL: url
+        )
+        let start = Date()
+        let preview = try PreviewRenderer.render(context: context)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 10)
+        XCTAssertEqual(preview.renderer, "SQLite")
+        XCTAssertTrue(preview.html.contains("cosmic"))
     }
 
     func testNonDatabaseIsRejected() {

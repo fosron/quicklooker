@@ -27,7 +27,7 @@ public enum PreviewRenderer {
     // MARK: - Routing
 
     public static func detectFormat(_ context: RenderContext) -> Format {
-        if context.fileURL?.hasDirectoryPath == true {
+        if context.isDirectory || context.fileURL?.hasDirectoryPath == true {
             return .folder
         }
         if context.data.isEmpty {
@@ -60,7 +60,8 @@ public enum PreviewRenderer {
             return .jsonLines
         }
 
-        let prefix = Array(context.data.prefix(16))
+        // Enough for the tar magic at offset 257 as well as the short magics.
+        let prefix = Array(context.data.prefix(512))
 
         if prefix.starts(with: [0x53, 0x51, 0x4C, 0x69, 0x74, 0x65]) { // "SQLite"
             return .sqlite
@@ -73,7 +74,7 @@ public enum PreviewRenderer {
         if prefix.starts(with: [0x1F, 0x8B]) {
             return .archive
         }
-        if prefix.count >= 262, String(bytes: prefix[257..<262], encoding: .utf8)?.hasPrefix("ustar") == true {
+        if prefix.count >= 265, String(bytes: prefix[257..<262], encoding: .utf8)?.hasPrefix("ustar") == true {
             return .archive
         }
 

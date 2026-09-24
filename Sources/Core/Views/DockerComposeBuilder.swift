@@ -238,7 +238,7 @@ public enum DockerComposeBuilder {
 
         var secretCount = 0
         let rows = pairs.map { key, value -> [Document.Cell] in
-            if SecretsMasking.isSecretKey(key) {
+            if SecretsMasking.shouldMask(key: key, value: value) {
                 secretCount += 1
                 return [
                     Document.Cell(html: "<span class=\"key\">\(HTML.escape(key))</span>"),

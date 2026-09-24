@@ -20,9 +20,6 @@ public enum SecretsBuilder {
         public let isSecret: Bool
     }
 
-    /// Keys containing one of these fragments are treated as secrets.
-    static var secretPatterns: [String] { SecretsMasking.secretPatterns }
-
     public static func isSecretKey(_ key: String) -> Bool {
         SecretsMasking.isSecretKey(key)
     }
@@ -96,7 +93,7 @@ public enum SecretsBuilder {
     public static func render(context: RenderContext) throws -> RenderedPreview {
         let entries = parse(text: context.text)
         let assignments = entries.filter { $0.kind == .assignment }
-        let secretCount = assignments.filter(\.isSecret).count
+        let secretCount = assignments.filter { SecretsMasking.shouldMask(key: $0.key, value: $0.value) }.count
 
         // Only masked values are written to the document. The unmasked values
         // are never embedded in the HTML, so a preview can never leak them.
@@ -111,7 +108,7 @@ public enum SecretsBuilder {
                 rows += row(entry, value: "<span class=\"warn-text\">\(HTML.escape(entry.raw))</span>")
             case .assignment:
                 let key = "<span class=\"env-key\">\(HTML.escape(entry.key))</span><span class=\"env-equals\">=</span>"
-                if entry.isSecret {
+                if SecretsMasking.shouldMask(key: entry.key, value: entry.value) {
                     rows += row(entry, value: "\(key)<span class=\"masked-value tok-string\">\(HTML.escape(mask(entry.value)))\"</span>")
                 } else {
                     rows += row(entry, value: "\(key)<span class=\"tok-string\">\(HTML.escape(entry.value))\"</span>")

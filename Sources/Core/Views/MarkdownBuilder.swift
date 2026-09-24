@@ -257,15 +257,25 @@ public final class MarkdownRenderer {
             if codeSpans.count > 500 { break }
         }
 
+        // URLs arrive HTML escaped from the source pass, so unescape them and
+        // escape again for the attribute context. Attribute quoting is what
+        // keeps a URL containing a quote from breaking out of src/href.
         output = replace(pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)"#, in: output) { groups in
-            "<img src=\"\(groups[1])\" alt=\"\(groups[0])\">"
+            let source = Self.unescapeHTML(groups[1])
+            let alt = groups[0]
+            guard Self.isSafeImageSource(source) else {
+                // Remote images are never requested: the preview stays offline.
+                return "<span class=\"meta\">🖼 \(alt) (\(HTML.escape(source)))</span>"
+            }
+            return "<img src=\"\(HTML.escapeAttribute(source))\" alt=\"\(HTML.escape(alt))\">"
         }
         output = replace(pattern: #"\[([^\]]+)\]\(([^)\s]+)\)"#, in: output) { groups in
-            let url = groups[1]
-            if url.hasPrefix("http://") || url.hasPrefix("https://") || url.hasPrefix("mailto:") {
-                return "<a href=\"\(url)\">\(groups[0])</a>"
+            let text = groups[0]
+            let url = Self.unescapeHTML(groups[1])
+            if Self.isSafeLinkTarget(url) {
+                return "<a href=\"\(HTML.escapeAttribute(url))\">\(text)</a>"
             }
-            return "\(groups[0]) (\(url))"
+            return "\(text) (\(HTML.escape(url)))"
         }
         output = replace(pattern: #"\*\*([^*]+)\*\*"#, in: output) { "<strong>\($0[0])</strong>" }
         output = replace(pattern: #"__([^_]+)__"#, in: output) { "<strong>\($0[0])</strong>" }
@@ -278,6 +288,55 @@ public final class MarkdownRenderer {
             output = output.replacingOccurrences(of: "\u{0001}\(offset)\u{0001}", with: span)
         }
         return output
+    }
+
+    /// Reverses the entity escaping applied before inline parsing.
+    static func unescapeHTML(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&amp;", with: "&")
+    }
+
+    /// Links may point anywhere but are only rendered as links for schemes a
+    /// preview can safely offer.
+    static func isSafeLinkTarget(_ url: String) -> Bool {
+        let lowered = url.lowercased()
+        if lowered.hasPrefix("http://") || lowered.hasPrefix("https://") || lowered.hasPrefix("mailto:") {
+            return true
+        }
+        // Relative and fragment links are safe and useful for local docs.
+        if url.hasPrefix("#") || url.hasPrefix("/") || url.hasPrefix("./") || url.hasPrefix("../") {
+            return true
+        }
+        if let colon = url.firstIndex(of: ":") {
+            let scheme = lowered[..<colon]
+            if scheme.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "+" || $0 == "-" || $0 == "." }) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Only local or data-URI images render. Remote images would issue a
+    /// network request, which the preview promises never to do.
+    static func isSafeImageSource(_ url: String) -> Bool {
+        let lowered = url.lowercased()
+        if lowered.hasPrefix("data:image/") {
+            return true
+        }
+        if hasScheme(lowered) {
+            return false
+        }
+        return true
+    }
+
+    private static func hasScheme(_ lowered: String) -> Bool {
+        guard let colon = lowered.firstIndex(of: ":") else { return false }
+        let scheme = lowered[..<colon]
+        return scheme.allSatisfy { $0.isLetter || $0.isNumber || $0 == "+" || $0 == "-" || $0 == "." }
     }
 
     private func replace(pattern: String, in text: String, transform: ([String]) -> String) -> String {

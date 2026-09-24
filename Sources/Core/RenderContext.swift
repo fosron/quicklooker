@@ -58,6 +58,9 @@ public struct RenderContext: Sendable {
     /// Original file URL when the preview is backed by a file on disk. Some
     /// adapters (SQLite, folders) use it to avoid copying large payloads.
     public var fileURL: URL?
+    /// True when the file URL points at a directory. `URL.hasDirectoryPath`
+    /// only reflects a trailing slash, so the caller passes this in.
+    public var isDirectory: Bool
 
     public init(
         data: Data,
@@ -66,7 +69,8 @@ public struct RenderContext: Sendable {
         appearance: Appearance = .auto,
         limits: PreviewLimits = .default,
         wasTruncatedAtRead: Bool = false,
-        fileURL: URL? = nil
+        fileURL: URL? = nil,
+        isDirectory: Bool = false
     ) {
         self.data = data
         self.fileName = fileName
@@ -75,6 +79,7 @@ public struct RenderContext: Sendable {
         self.limits = limits
         self.wasTruncatedAtRead = wasTruncatedAtRead
         self.fileURL = fileURL
+        self.isDirectory = isDirectory
     }
 
     /// Lowercased extension without the leading dot.

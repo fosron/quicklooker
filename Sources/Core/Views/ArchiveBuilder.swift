@@ -4,7 +4,7 @@ import Foundation
 public enum ArchiveBuilder {
 
     public static func render(context: RenderContext) throws -> RenderedPreview {
-        if context.fileURL?.hasDirectoryPath == true {
+        if context.isDirectory || context.fileURL?.hasDirectoryPath == true {
             return try renderFolder(context)
         }
         if let archive = try routeToArchive(context) {
@@ -27,14 +27,30 @@ public enum ArchiveBuilder {
         default:
             break
         }
-        if context.contentTypeIdentifier.hasSuffix("zip-archive") {
+        let type = context.contentTypeIdentifier.lowercased()
+        if type.contains("zip-archive") {
             return try renderZIP(context)
         }
-        if context.contentTypeIdentifier.hasSuffix("tar-archive") {
+        if type.contains("tar-archive") {
             return try renderTAR(context)
         }
-        if context.contentTypeIdentifier.hasSuffix("gzip") {
+        if type.contains("gzip") {
             return try renderGZIP(context)
+        }
+        // Files with no helpful extension or type are routed by their magic
+        // bytes so a ZIP/tar/gzip named `archive` still lists.
+        let prefix = Array(context.data.prefix(4))
+        if prefix.starts(with: [0x50, 0x4B, 0x03, 0x04])
+            || prefix.starts(with: [0x50, 0x4B, 0x05, 0x06])
+            || prefix.starts(with: [0x50, 0x4B, 0x07, 0x08]) {
+            return try renderZIP(context)
+        }
+        if prefix.starts(with: [0x1F, 0x8B]) {
+            return try renderGZIP(context)
+        }
+        if context.data.count >= 262,
+           String(data: context.data[257..<262], encoding: .utf8)?.hasPrefix("ustar") == true {
+            return try renderTAR(context)
         }
         return nil
     }
@@ -44,7 +60,11 @@ public enum ArchiveBuilder {
     static func renderZIP(_ context: RenderContext) throws -> RenderedPreview {
         let entries: [ZIPReader.Entry]
         do {
-            entries = try ZIPReader.entries(in: context.data)
+            if let url = context.fileURL, !url.hasDirectoryPath, FileManager.default.fileExists(atPath: url.path) {
+                entries = try ZIPReader.entries(fileURL: url, data: context.data)
+            } else {
+                entries = try ZIPReader.entries(in: context.data)
+            }
         } catch {
             return try CodeBuilder.fallbackPreview(
                 context: context,
@@ -92,7 +112,7 @@ public enum ArchiveBuilder {
             rows: rows
         )
 
-        let truncated = entries.count > visible.count || context.wasTruncatedAtRead
+        let truncated = entries.count > visible.count
         var notice: String? = nil
         if entries.count > visible.count {
             notice = "List limited to the first \(Format.integer(visible.count)) entries."
@@ -243,43 +263,60 @@ public enum ArchiveBuilder {
         guard let url = context.fileURL else {
             throw PreviewError.unreadableFile("missing folder URL")
         }
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
         let contents = try FileManager.default.contentsOfDirectory(
             at: url,
-            includingPropertiesForKeys: keys,
+            includingPropertiesForKeys: Array(keys),
             options: []
         )
-        let sorted = contents.sorted { lhs, rhs in
-            let lhsDirectory = (try? lhs.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            let rhsDirectory = (try? rhs.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            if lhsDirectory != rhsDirectory {
-                return lhsDirectory
+
+        // Fetch the resource values once per item: the sort and the table both
+        // need them, and asking the file system inside the comparator is
+        // O(n log n) disk queries.
+        struct Item {
+            let url: URL
+            let name: String
+            let isDirectory: Bool
+            let isSymbolicLink: Bool
+            let size: Int
+            let modified: Date?
+        }
+        var items: [Item] = contents.map { item in
+            let values = try? item.resourceValues(forKeys: keys)
+            return Item(
+                url: item,
+                name: item.lastPathComponent,
+                isDirectory: values?.isDirectory ?? false,
+                isSymbolicLink: values?.isSymbolicLink ?? false,
+                size: values?.fileSize ?? 0,
+                modified: values?.contentModificationDate
+            )
+        }
+        items.sort { lhs, rhs in
+            if lhs.isDirectory != rhs.isDirectory {
+                return lhs.isDirectory
             }
-            return lhs.lastPathComponent.localizedStandardCompare(rhs.lastPathComponent) == .orderedAscending
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
 
-        let visible = sorted.prefix(context.limits.maxEntries)
+        let visible = items.prefix(context.limits.maxEntries)
         var rows: [[Document.Cell]] = []
         var directoryCount = 0
         var totalSize = 0
         for item in visible {
-            let values = try? item.resourceValues(forKeys: Set(keys))
-            let isDirectory = values?.isDirectory ?? false
-            if isDirectory { directoryCount += 1 }
-            let size = values?.fileSize ?? 0
-            if !isDirectory { totalSize += size }
-            let icon = isDirectory ? "📁" : iconFor(name: item.lastPathComponent)
-            let isSymlink = values?.isSymbolicLink ?? false
-            let name = "\(icon) \(HTML.escape(item.lastPathComponent))\(isSymlink ? " ↗" : "")"
+            if item.isDirectory { directoryCount += 1 }
+            if !item.isDirectory { totalSize += item.size }
+            let icon = item.isDirectory ? "📁" : iconFor(name: item.name)
+            let name = "\(icon) \(HTML.escape(item.name))\(item.isSymbolicLink ? " ↗" : "")"
             rows.append([
                 Document.Cell(html: name),
-                Document.Cell(isDirectory ? "—" : Format.bytes(size), alignment: .right),
-                Document.Cell(values?.contentModificationDate.map { Format.date($0) } ?? "—"),
+                Document.Cell(item.isDirectory ? "—" : Format.bytes(item.size), alignment: .right),
+                Document.Cell(item.modified.map { Format.date($0) } ?? "—"),
             ])
         }
 
         var html = Document.cards([
-            ("items", Format.integer(sorted.count)),
+            ("items", Format.integer(items.count)),
             ("folders", Format.integer(directoryCount)),
             ("file size", Format.bytes(totalSize)),
         ])
@@ -287,10 +324,10 @@ public enum ArchiveBuilder {
 
         return RenderedPreview(
             renderer: "Folder",
-            summary: "\(Format.integer(sorted.count)) items · \(Format.integer(directoryCount)) folders",
+            summary: "\(Format.integer(items.count)) items · \(Format.integer(directoryCount)) folders",
             html: html,
-            truncated: sorted.count > visible.count,
-            notice: sorted.count > visible.count ? "List limited to the first \(Format.integer(visible.count)) items." : nil
+            truncated: items.count > visible.count,
+            notice: items.count > visible.count ? "List limited to the first \(Format.integer(visible.count)) items." : nil
         )
     }
 

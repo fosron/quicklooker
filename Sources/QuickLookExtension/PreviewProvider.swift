@@ -28,6 +28,16 @@ final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
             let limit = UInt64(limits.maxBytes)
             data = try handle.read(upToCount: Int(min(fileSize, limit))) ?? Data()
             truncatedAtRead = Int64(fileSize) > Int64(limits.maxBytes)
+            if truncatedAtRead {
+                // The table of contents of a ZIP lives at the end of the file,
+                // so append the tail as well; readers that need the central
+                // directory seek within it and the renderers stay bounded.
+                let tailLength = UInt64(min(2 * 1024 * 1024, Int64(fileSize)))
+                try handle.seek(toOffset: fileSize - tailLength)
+                if let tail = try handle.read(upToCount: Int(tailLength)) {
+                    data.append(tail)
+                }
+            }
         }
 
         let contentType = UTType(filenameExtension: url.pathExtension)?.identifier ?? ""
@@ -38,7 +48,8 @@ final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
             appearance: Self.currentAppearance,
             limits: limits,
             wasTruncatedAtRead: truncatedAtRead,
-            fileURL: url
+            fileURL: url,
+            isDirectory: isDirectory.boolValue
         )
 
         let html = PreviewRenderer.renderHTML(context: context)
@@ -56,8 +67,15 @@ final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
 
     // MARK: - Appearance
 
+    /// The extension is not an app, so `NSApp` is nil. `NSAppearance.current`
+    /// still reflects the system (or the Quick Look panel) appearance; the
+    /// generated CSS also follows `prefers-color-scheme` on its own.
     private static var currentAppearance: Appearance {
-        switch currentAppearanceName {
+        appearance(for: NSAppearance.currentDrawing().name ?? NSApp?.effectiveAppearance.name)
+    }
+
+    private static func appearance(for name: NSAppearance.Name?) -> Appearance {
+        switch name {
         case .darkAqua, .vibrantDark, .accessibilityHighContrastDarkAqua, .accessibilityHighContrastVibrantDark:
             return .dark
         case .aqua, .vibrantLight, .accessibilityHighContrastAqua, .accessibilityHighContrastVibrantLight:
@@ -65,9 +83,5 @@ final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
         default:
             return .auto
         }
-    }
-
-    private static var currentAppearanceName: NSAppearance.Name? {
-        NSApp?.effectiveAppearance.name
     }
 }

@@ -73,13 +73,18 @@ distribution.
 ## Notes
 
 - SQLite databases are opened with `SQLITE_OPEN_READONLY`; previewing never
-  mutates a file.
+  mutates a file. Every statement runs under a wall clock deadline and views
+  are never counted, so a recursive view cannot hang the preview.
+- ZIP listings are read from the end of central directory record, so archives
+  larger than the read window still list correctly.
 - `.env` values that match secret naming patterns are masked, and the unmasked
   value is never written into the preview document.
 - Archives are parsed in memory; ZIP64, split archives and sparse tar entries
   are rejected with a clear message instead of being partially parsed.
 - Gzip payloads are capped by `PreviewLimits.maxDecompressedBytes` to guard
   against decompression bombs.
+- Previews are offline by construction: the HTML carries a strict
+  Content-Security-Policy and Markdown never emits a remote image request.
 
 ## Verifying previews
 
