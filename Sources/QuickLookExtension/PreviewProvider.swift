@@ -28,16 +28,9 @@ final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
             let limit = UInt64(limits.maxBytes)
             data = try handle.read(upToCount: Int(min(fileSize, limit))) ?? Data()
             truncatedAtRead = Int64(fileSize) > Int64(limits.maxBytes)
-            if truncatedAtRead {
-                // The table of contents of a ZIP lives at the end of the file,
-                // so append the tail as well; readers that need the central
-                // directory seek within it and the renderers stay bounded.
-                let tailLength = UInt64(min(2 * 1024 * 1024, Int64(fileSize)))
-                try handle.seek(toOffset: fileSize - tailLength)
-                if let tail = try handle.read(upToCount: Int(tailLength)) {
-                    data.append(tail)
-                }
-            }
+            // `data` stays a straight prefix of the file. Renderers that need
+            // bytes outside that window (the ZIP central directory) seek the
+            // file through `fileURL` instead of reading a spliced buffer.
         }
 
         let contentType = UTType(filenameExtension: url.pathExtension)?.identifier ?? ""

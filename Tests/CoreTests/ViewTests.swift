@@ -32,9 +32,22 @@ final class MarkdownTests: XCTestCase {
         XCTAssertTrue(html.contains("https://example.com/i.png"))
     }
 
-    func testLocalImagesRender() {
-        let html = render("![diagram](./assets/diagram.png)").html
-        XCTAssertTrue(html.contains("<img src=\"./assets/diagram.png\" alt=\"diagram\">"))
+    func testOnlyDataURIImagesRender() {
+        // The CSP allows `data:` images only, so a relative source must not be
+        // emitted as an img element that would show as broken.
+        let relative = render("![diagram](./assets/diagram.png)").html
+        XCTAssertFalse(relative.contains("<img"))
+        XCTAssertTrue(relative.contains("diagram"))
+        XCTAssertTrue(relative.contains("./assets/diagram.png"))
+
+        let rootRelative = render("![d](/assets/d.png)").html
+        XCTAssertFalse(rootRelative.contains("<img"))
+
+        let protocolRelative = render("![d](//cdn.example.com/d.png)").html
+        XCTAssertFalse(protocolRelative.contains("<img"))
+
+        let dataURI = render("![pixel](data:image/png;base64,iVBORw0KGgo=)").html
+        XCTAssertTrue(dataURI.contains("<img src=\"data:image/png;base64,iVBORw0KGgo=\" alt=\"pixel\">"))
     }
 
     func testQuoteInURLCannotBreakOutOfAttribute() {

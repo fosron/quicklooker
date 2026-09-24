@@ -60,6 +60,24 @@ final class SecretsTests: XCTestCase {
         XCTAssertFalse(SecretsBuilder.isSecretKey("MONKEY_PATCH"))
     }
 
+    func testCamelCaseSecretNamesAreDetected() {
+        for key in ["authToken", "githubToken", "stripeKey", "sessionCookie", "apiKey", "clientSecret", "dbPassword", "accessKeyId"] {
+            XCTAssertTrue(SecretsMasking.isSecretKey(key), "\(key) should be treated as a secret")
+        }
+        for key in ["AUTHOR", "AUTHOR_NAME", "KEYBOARD_LAYOUT", "MONKEY_PATCH", "TURKEY_TIMER", "PRIMARY_KEY", "SORT_KEY", "CACHE_KEY", "PARTITION_KEY", "LOCALE_KEY"] {
+            XCTAssertFalse(SecretsMasking.isSecretKey(key), "\(key) should not be treated as a secret")
+        }
+    }
+
+    func testCamelCaseKeysAreMaskedInRender() throws {
+        let text = "authToken=abc123def456\nstripeKey=sk_live_9999999999\n"
+        let ctx = RenderContext(data: Data(text.utf8), fileName: ".env")
+        let preview = try PreviewRenderer.render(context: ctx)
+        XCTAssertFalse(preview.html.contains("abc123def456"))
+        XCTAssertFalse(preview.html.contains("sk_live_9999999999"))
+        XCTAssertTrue(preview.html.contains("2 likely secrets"))
+    }
+
     func testCredentialURLsMaskOnlyThePassword() {
         let masked = SecretsMasking.mask("postgres://admin:hunter2@db.example.com:5432/app")
         XCTAssertEqual(masked, "postgres://admin:••••••@db.example.com:5432/app")

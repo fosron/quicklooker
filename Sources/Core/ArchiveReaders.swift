@@ -67,14 +67,11 @@ public enum ZIPReader {
         return try parseCentralDirectory(directory, entryCount: entryCount)
     }
 
-    /// File backed variant. Reads the EOCD and central directory by seeking so
-    /// archives larger than the preview read limit still list correctly, and
-    /// also handles archives whose central directory sits past the truncation
-    /// point of `data` (the provider reads the head plus the tail).
-    public static func entries(fileURL: URL, data: Data) throws -> [Entry] {
-        if hasCompleteCentralDirectory(data) {
-            return try entries(in: data)
-        }
+    /// File backed variant used when the in-memory payload may be truncated.
+    /// The EOCD and central directory are read by seeking, so archives larger
+    /// than the preview read window still list correctly and the caller never
+    /// has to hand over (or splice) the whole file.
+    public static func entries(fileURL: URL) throws -> [Entry] {
         guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
             throw ArchiveError.notAnArchive
         }
@@ -108,18 +105,6 @@ public enum ZIPReader {
             throw ArchiveError.corrupted("central directory could not be read")
         }
         return try parseCentralDirectory(directory, entryCount: entryCount)
-    }
-
-    /// True when `data` contains a complete central directory for a ZIP file.
-    private static func hasCompleteCentralDirectory(_ data: Data) -> Bool {
-        guard let eocd = findEndOfCentralDirectory(data) else { return false }
-        let entryCount = Int(readUInt16(data, eocd + 10))
-        let centralOffset = Int(readUInt32(data, eocd + 16))
-        let centralSize = Int(readUInt32(data, eocd + 12))
-        guard centralOffset != 0xFFFF_FFFF, entryCount != 0xFFFF, centralSize != 0xFFFF_FFFF else {
-            return false
-        }
-        return centralOffset + centralSize <= data.count && centralOffset >= 0 && centralSize >= 0
     }
 
     private static func parseCentralDirectory(_ slice: Data, entryCount: Int) throws -> [Entry] {
@@ -395,7 +380,8 @@ public enum TARReader {
             }
             return value
         }
-        let digits = field.prefix { $0 >= 0x30 && $0 <= 0x37 }
+        // Older writers pad the field with spaces or NULs before the digits.
+        let digits = field.drop { $0 == 0x20 || $0 == 0x00 }.prefix { $0 >= 0x30 && $0 <= 0x37 }
         guard !digits.isEmpty else { return 0 }
         return Int(String(bytes: digits, encoding: .ascii) ?? "", radix: 8)
     }

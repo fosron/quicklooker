@@ -60,11 +60,7 @@ public enum ArchiveBuilder {
     static func renderZIP(_ context: RenderContext) throws -> RenderedPreview {
         let entries: [ZIPReader.Entry]
         do {
-            if let url = context.fileURL, !url.hasDirectoryPath, FileManager.default.fileExists(atPath: url.path) {
-                entries = try ZIPReader.entries(fileURL: url, data: context.data)
-            } else {
-                entries = try ZIPReader.entries(in: context.data)
-            }
+            entries = try zipEntries(context)
         } catch {
             return try CodeBuilder.fallbackPreview(
                 context: context,
@@ -126,6 +122,19 @@ public enum ArchiveBuilder {
         )
     }
 
+    /// Uses the in-memory payload when it holds the whole archive, otherwise
+    /// seeks the central directory from the file. The payload is a straight
+    /// prefix of the file, never a splice, so offsets stay meaningful.
+    private static func zipEntries(_ context: RenderContext) throws -> [ZIPReader.Entry] {
+        if !context.wasTruncatedAtRead {
+            return try ZIPReader.entries(in: context.data)
+        }
+        if let url = context.fileURL, !url.hasDirectoryPath, FileManager.default.fileExists(atPath: url.path) {
+            return try ZIPReader.entries(fileURL: url)
+        }
+        return try ZIPReader.entries(in: context.data)
+    }
+
     // MARK: - TAR
 
     static func renderTAR(_ context: RenderContext) throws -> RenderedPreview {
@@ -147,14 +156,23 @@ public enum ArchiveBuilder {
             ("entries", Format.integer(entries.count)),
             ("total size", Format.bytes(totalSize)),
         ])
+        if context.wasTruncatedAtRead {
+            html += Document.notice("Only the first \(Format.bytes(context.limits.maxBytes)) of this archive were read, so the listing may end early.")
+        }
         html += tarTable(entries: Array(visible))
-        let truncated = entries.count > visible.count || context.wasTruncatedAtRead
+        var notices: [String] = []
+        if entries.count > visible.count {
+            notices.append("List limited to the first \(Format.integer(visible.count)) entries.")
+        }
+        if context.wasTruncatedAtRead {
+            notices.append("The archive is larger than the preview read limit; entries after that point are not listed.")
+        }
         return RenderedPreview(
             renderer: "tar archive",
             summary: "\(Format.integer(entries.count)) entries · \(Format.bytes(context.data.count))",
             html: html,
-            truncated: truncated,
-            notice: entries.count > visible.count ? "List limited to the first \(Format.integer(visible.count)) entries." : nil
+            truncated: entries.count > visible.count || context.wasTruncatedAtRead,
+            notice: notices.isEmpty ? nil : notices.joined(separator: " ")
         )
     }
 
@@ -201,8 +219,10 @@ public enum ArchiveBuilder {
         var cards: [(String, String)] = [
             ("decompressed", Format.bytes(result.data.count)),
             ("compressed", Format.bytes(context.data.count)),
-            ("original size field", Format.bytes(result.originalSize)),
         ]
+        if !context.wasTruncatedAtRead {
+            cards.append(("original size field", Format.bytes(result.originalSize)))
+        }
         if let name = result.info.originalName, !name.isEmpty {
             cards.append(("original name", name))
         }

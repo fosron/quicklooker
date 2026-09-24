@@ -24,6 +24,13 @@ public enum SecretsMasking {
     /// Fragments that only ever appear in credential names.
     private static let fragments: [String] = ["secret", "password", "passwd"]
 
+    /// Modifiers that combine with `key` without implying a secret.
+    private static let nonSecretKeyModifiers: Set<String> = [
+        "primary", "foreign", "sort", "cache", "partition", "shard", "routing",
+        "hash", "index", "group", "map", "locale", "currency", "country",
+        "monkey", "turkey",
+    ]
+
     /// Splits an identifier such as `DATABASE_PASSWORD` or `clientSecret` into
     /// lowercased tokens so matching does not rely on substrings: `AUTHOR`
     /// no longer matches `auth`.
@@ -38,7 +45,7 @@ public enum SecretsMasking {
                     current = ""
                 }
                 current.append(character)
-                previousWasUppercase = true
+                previousWasUppercase = character.isUppercase
             } else {
                 if !current.isEmpty {
                     tokens.append(current.lowercased())
@@ -73,8 +80,9 @@ public enum SecretsMasking {
                     || previous == "signing" || previous == "encryption" || previous == "access" {
                     return true
                 }
-                // Any other `something_key` name is treated as a secret too.
-                if index > 0, previous != "monkey", previous != "turkey" {
+                // Any other `something_key` name is treated as a secret, apart
+                // from names that never hold credentials.
+                if index > 0, let previous, !nonSecretKeyModifiers.contains(previous) {
                     return true
                 }
             }

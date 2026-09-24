@@ -193,10 +193,9 @@ final class ArchiveTests: XCTestCase {
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0, "zip command failed")
 
-        // Only the head is passed in, mimicking a truncated read: the reader
-        // must fall back to seeking within the file for the central directory.
-        let head = try FileHandle(forReadingFrom: url).read(upToCount: 64 * 1024) ?? Data()
-        let entries = try ZIPReader.entries(fileURL: url, data: head)
+        // The renderer uses the seek path whenever the payload was truncated,
+        // so the reader never needs the tail in memory.
+        let entries = try ZIPReader.entries(fileURL: url)
         XCTAssertEqual(entries.count, 2)
         XCTAssertTrue(entries.contains { $0.name == "hello.txt" })
         XCTAssertTrue(entries.contains { $0.name == "big.bin" })
@@ -212,6 +211,43 @@ final class ArchiveTests: XCTestCase {
         }
         bytes[0] = UInt8(remaining & 0x7F) | 0x80
         return bytes
+    }
+
+    func testZIPTruncatedPayloadUsesFileSeek() throws {
+        // A payload larger than the read limit must not be treated as a
+        // complete archive: the render context is truncated and the reader
+        // seeks the real file for the central directory.
+        let url = Fixtures.url("sample.zip")
+        let full = try Fixtures.data("sample.zip")
+        // Prefix only, mimicking what the provider hands over for a big file.
+        let prefix = full.prefix(200)
+        var limits = PreviewLimits.default
+        _ = limits
+        let context = RenderContext(
+            data: Data(prefix),
+            fileName: "sample.zip",
+            wasTruncatedAtRead: true,
+            fileURL: url
+        )
+        XCTAssertEqual(PreviewRenderer.detectFormat(context), .archive)
+        let preview = try PreviewRenderer.render(context: context)
+        XCTAssertEqual(preview.renderer, "ZIP archive")
+        XCTAssertTrue(preview.html.contains("README.md"))
+    }
+
+    func testTarTruncationIsReported() throws {
+        let url = Fixtures.url("sample.tar")
+        let full = try Fixtures.data("sample.tar")
+        let context = RenderContext(
+            data: full.prefix(1024),
+            fileName: "sample.tar",
+            wasTruncatedAtRead: true,
+            fileURL: url
+        )
+        let preview = try PreviewRenderer.render(context: context)
+        XCTAssertEqual(preview.renderer, "tar archive")
+        XCTAssertTrue(preview.truncated)
+        XCTAssertTrue(preview.html.contains("may end early"))
     }
 
     func testZipWithoutExtensionIsRoutedToArchive() throws {

@@ -75,8 +75,10 @@ distribution.
 - SQLite databases are opened with `SQLITE_OPEN_READONLY`; previewing never
   mutates a file. Every statement runs under a wall clock deadline and views
   are never counted, so a recursive view cannot hang the preview.
-- ZIP listings are read from the end of central directory record, so archives
-  larger than the read window still list correctly.
+- ZIP listings are read from the end of central directory record by seeking
+  the file, so archives larger than the read window still list correctly. The
+  in-memory payload is always a straight prefix of the file, never a splice,
+  so offsets stay meaningful; tar listings report when they were cut off.
 - `.env` values that match secret naming patterns are masked, and the unmasked
   value is never written into the preview document.
 - Archives are parsed in memory; ZIP64, split archives and sparse tar entries

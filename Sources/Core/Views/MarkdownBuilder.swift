@@ -320,23 +320,11 @@ public final class MarkdownRenderer {
         return true
     }
 
-    /// Only local or data-URI images render. Remote images would issue a
-    /// network request, which the preview promises never to do.
+    /// The document's Content-Security-Policy only allows `data:` images, so a
+    /// relative or remote source would render as a broken image. Everything
+    /// that is not an inline data URI becomes a placeholder instead.
     static func isSafeImageSource(_ url: String) -> Bool {
-        let lowered = url.lowercased()
-        if lowered.hasPrefix("data:image/") {
-            return true
-        }
-        if hasScheme(lowered) {
-            return false
-        }
-        return true
-    }
-
-    private static func hasScheme(_ lowered: String) -> Bool {
-        guard let colon = lowered.firstIndex(of: ":") else { return false }
-        let scheme = lowered[..<colon]
-        return scheme.allSatisfy { $0.isLetter || $0.isNumber || $0 == "+" || $0 == "-" || $0 == "." }
+        url.lowercased().hasPrefix("data:image/")
     }
 
     private func replace(pattern: String, in text: String, transform: ([String]) -> String) -> String {

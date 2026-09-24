@@ -157,14 +157,24 @@ public final class SQLiteDatabase {
 
     /// Loads at most `limit` rows. Views are never counted because a recursive
     /// view can run forever, and every statement gets a wall clock deadline.
-    public func preview(table: String, limit: Int, sampleRows: Int = 0, isView: Bool = false) throws -> RowPreview {
+    /// Pass `skipCount` to avoid the count entirely, e.g. once a previous count
+    /// timed out and the remaining tables are unlikely to be cheaper.
+    public func preview(
+        table: String,
+        limit: Int,
+        sampleRows: Int = 0,
+        isView: Bool = false,
+        skipCount: Bool = false
+    ) throws -> RowPreview {
         var total = 0
-        var counted = false
-        if !isView {
+        var countTimedOut = false
+        var hasCount = false
+        if !isView, !skipCount {
             let deadline = QueryDeadline(seconds: 1.5)
             total = try rowCount(table: table, deadline: deadline)
-            counted = !deadline.didFire
-            if !counted {
+            hasCount = !deadline.didFire
+            countTimedOut = deadline.didFire
+            if countTimedOut {
                 total = 0
             }
         }
@@ -186,7 +196,7 @@ public final class SQLiteDatabase {
             }
         }
         let hitRowDeadline = rowDeadline.didFire
-        if !counted || hitRowDeadline {
+        if !hasCount || hitRowDeadline {
             total = rows.count
         }
         return RowPreview(
@@ -194,7 +204,7 @@ public final class SQLiteDatabase {
             rows: rows,
             totalRows: total,
             sampledRows: max(0, sampleRows),
-            countTimedOut: !counted
+            countTimedOut: countTimedOut
         )
     }
 
@@ -346,18 +356,44 @@ public enum SQLiteBuilder {
             html += "<div class=\"empty\">No tables found in this database.</div>"
         }
 
-        for table in tables {
-            html += try tableSection(database: database, object: table, context: context)
+        // The whole preview gets one wall clock budget. Per statement deadlines
+        // bound a single query; this bounds a database with many slow tables.
+        let deadline = Date().addingTimeInterval(12)
+        var countingEnabled = true
+        var skipped = 0
+
+        for object in tables + views {
+            guard Date() < deadline else {
+                skipped += 1
+                continue
+            }
+            let section = try tableSection(
+                database: database,
+                object: object,
+                context: context,
+                countingEnabled: countingEnabled
+            )
+            html += section.html
+            if section.countTimedOut {
+                // Stop counting after the first timeout: the remaining tables
+                // are unlikely to be cheaper and the counts are cosmetic.
+                countingEnabled = false
+            }
         }
-        for view in views {
-            html += try tableSection(database: database, object: view, context: context)
+        if skipped > 0 {
+            html += "<div class=\"notice\"><span>ℹ️</span><span>\(Format.integer(skipped)) object(s) were not rendered because the preview ran out of time.</span></div>"
         }
 
         let summary = "\(Format.integer(tables.count)) tables\(views.isEmpty ? "" : " · \(Format.integer(views.count)) views") · \(Format.bytes(context.data.count))"
         return RenderedPreview(renderer: "SQLite", summary: summary, html: html)
     }
 
-    private static func tableSection(database: SQLiteDatabase, object: SQLiteDatabase.ObjectInfo, context: RenderContext) throws -> String {
+    private static func tableSection(
+        database: SQLiteDatabase,
+        object: SQLiteDatabase.ObjectInfo,
+        context: RenderContext,
+        countingEnabled: Bool
+    ) throws -> (html: String, countTimedOut: Bool) {
         var html = ""
         let isView = object.kind == "view"
         let icon = isView ? "👁" : "▦"
@@ -394,7 +430,8 @@ public enum SQLiteBuilder {
             table: object.name,
             limit: context.limits.maxRows,
             sampleRows: context.limits.maxRows,
-            isView: isView
+            isView: isView,
+            skipCount: !countingEnabled
         )
         if preview.rows.isEmpty {
             html += "<div class=\"empty\">No rows.</div>"
@@ -423,6 +460,6 @@ public enum SQLiteBuilder {
                 html += "<div class=\"meta\" style=\"margin-top:6px\">\(Format.integer(shown)) row\(shown == 1 ? "" : "s").</div>"
             }
         }
-        return html
+        return (html, preview.countTimedOut)
     }
 }

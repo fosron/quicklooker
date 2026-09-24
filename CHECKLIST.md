@@ -84,7 +84,7 @@ provider avoids ambiguous Quick Look handler priority between extensions.
       (`ConfigFormatTests.swift`, `ViewTests.swift`)
 - [x] XCTest: composer.json / composer.lock tests (`ComposerTests.swift`)
 - [x] XCTest: docker-compose tests (`DockerComposeTests.swift`)
-      — **112 tests, all passing**
+      — **130 tests, all passing**
 - [x] Sample fixture files for each type (`Tests/CoreTests/Fixtures/`)
 - [ ] Manual: enable extension via System Settings
 - [ ] Manual: Finder space-bar preview each supported file
@@ -105,7 +105,7 @@ provider avoids ambiguous Quick Look handler priority between extensions.
 - [ ] Post-release bug fix plan
 
 ## Verification log
-- `xcodebuild -project QuickLooker.xcodeproj -scheme QuickLooker test` → 112/112 pass
+- `xcodebuild -project QuickLooker.xcodeproj -scheme QuickLooker test` → 130/130 pass
 - Release build: ad-hoc signed app + extension, `codesign --verify --deep --strict` passes
 - Extension registers with LaunchServices: `pluginkit -m -i com.fosron.quicklooker.preview` → `+`
 - Known environment issue: `qlmanage` crashes for *any* third-party preview
